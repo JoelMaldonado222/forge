@@ -108,7 +108,7 @@ struct StatTile: View {
         VStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(.orange)
+                .foregroundStyle(ForgeTheme.volt)
             Text(value)
                 .font(.title3)
                 .bold()

@@ -169,6 +169,13 @@ struct CardioDraft: Identifiable {
     var miles = ""
 }
 
+/// Identifies a single text field on the logging screen so one shared
+/// keyboard Done button can dismiss whichever field is focused.
+enum LoggingField: Hashable {
+    case setReps(UUID)
+    case setWeight(UUID)
+}
+
 struct ActiveWorkoutView: View {
     var ownerID: UUID
     /// The lifter's current bodyweight, for one-tap fill on bodyweight moves.
@@ -186,6 +193,9 @@ struct ActiveWorkoutView: View {
     @State private var showFinishConfirm = false
     @State private var showDiscardConfirm = false
     @State private var showEmptyAlert = false
+    @State private var showSaveError = false
+    @State private var saveErrorMessage: String?
+    @FocusState private var focusedField: LoggingField?
 
     init(ownerID: UUID, bodyweightLbs: Double, startTime: Date, initialExercises: [ExerciseDefinition], onFinish: @escaping (WorkoutSession, [CardioEntry]) -> Void, onCancel: @escaping () -> Void) {
         self.ownerID = ownerID
@@ -219,7 +229,7 @@ struct ActiveWorkoutView: View {
                 }
 
                 ForEach($exerciseDrafts) { $draft in
-                    ExerciseLoggingCard(draft: $draft, bodyweightLbs: bodyweightLbs) {
+                    ExerciseLoggingCard(draft: $draft, bodyweightLbs: bodyweightLbs, focusedField: $focusedField) {
                         exerciseDrafts.removeAll { $0.id == draft.id }
                     }
                     .padding(.horizontal)
@@ -265,6 +275,10 @@ struct ActiveWorkoutView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { showDiscardConfirm = true }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
             }
         }
         .confirmationDialog("Discard this workout?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
@@ -330,6 +344,11 @@ struct ActiveWorkoutView: View {
         } message: {
             Text("Add at least one set or one cardio bout before finishing.")
         }
+        .alert("Couldn't save workout", isPresented: $showSaveError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveErrorMessage ?? "Your sets are still on this screen — nothing was lost. Try again.")
+        }
     }
 
     private func finishWorkout() {
@@ -373,6 +392,11 @@ struct ActiveWorkoutView: View {
             ))
         }
         context.insert(session)
+        // Explicitly insert the sets too — never rely on relationship
+        // cascade alone for persistence.
+        for set in session.sets {
+            context.insert(set)
+        }
 
         var entries: [CardioEntry] = []
         for item in cardioLogged {
@@ -388,7 +412,13 @@ struct ActiveWorkoutView: View {
             context.insert(entry)
             entries.append(entry)
         }
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            saveErrorMessage = "The save failed (\(error.localizedDescription)). Your sets are still on this screen — nothing was lost. Try again."
+            showSaveError = true
+            return
+        }
         onFinish(session, entries)
     }
 }
@@ -435,6 +465,7 @@ struct CardioLoggingCard: View {
 struct ExerciseLoggingCard: View {
     @Binding var draft: ExerciseDraft
     var bodyweightLbs: Double
+    var focusedField: FocusState<LoggingField?>.Binding
     var onRemoveExercise: () -> Void
 
     private var stats: (volume: Double, best1RM: Double?) {
@@ -487,6 +518,7 @@ struct ExerciseLoggingCard: View {
                     draft: $set,
                     setNumber: number,
                     canDelete: draft.sets.count > 1,
+                    focusedField: focusedField,
                     onDelete: { draft.sets.removeAll { $0.id == set.id } }
                 )
             }
@@ -519,14 +551,8 @@ struct SetRowView: View {
     @Binding var draft: SetDraft
     var setNumber: Int
     var canDelete: Bool
+    var focusedField: FocusState<LoggingField?>.Binding
     var onDelete: () -> Void
-
-    @FocusState private var focusedField: Field?
-
-    private enum Field: Hashable {
-        case reps
-        case weight
-    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -536,12 +562,12 @@ struct SetRowView: View {
                 .frame(width: 52, alignment: .leading)
             TextField("Reps", text: $draft.reps)
                 .keyboardType(.numberPad)
-                .focused($focusedField, equals: .reps)
+                .focused(focusedField, equals: .setReps(draft.id))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 70)
             TextField("Weight", text: $draft.weight)
                 .keyboardType(.decimalPad)
-                .focused($focusedField, equals: .weight)
+                .focused(focusedField, equals: .setWeight(draft.id))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 90)
             Text("lb")
@@ -553,12 +579,6 @@ struct SetRowView: View {
                     Image(systemName: "minus.circle")
                         .foregroundStyle(.red)
                 }
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { focusedField = nil }
             }
         }
     }
