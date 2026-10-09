@@ -7,7 +7,7 @@ enum SummaryGenerator {
     /// - Parameter cardio: cardio bouts logged with this session (defaults to
     ///   none, so historical recaps without cardio keep working).
     static func sessionRecap(name: String, session: WorkoutSession, profile: UserProfile, cardio: [CardioEntry] = []) -> String {
-        let sets = session.sets.sorted { $0.setNumber < $1.setNumber }
+        let sets = session.sets
         let sortedCardio = cardio.sorted { $0.durationMin > $1.durationMin }
         guard !sets.isEmpty || !sortedCardio.isEmpty else {
             return "\(name), this session has no logged sets yet."
@@ -17,17 +17,12 @@ enum SummaryGenerator {
         lines.append("\(name), here's your session from \(dateString(session.date)).")
         lines.append("")
 
-        // Group sets by exercise, preserving first-appearance order.
-        var order: [String] = []
-        var grouped: [String: [LoggedSet]] = [:]
-        for set in sets {
-            if grouped[set.exerciseId] == nil { order.append(set.exerciseId) }
-            grouped[set.exerciseId, default: []].append(set)
-        }
+        // Exercises in the order they were logged.
+        let groups = TrainingMath.exerciseGroups(sets: sets)
 
-        for exerciseId in order {
-            guard let exerciseSets = grouped[exerciseId] else { continue }
-            let displayName = (exerciseSets.first?.exerciseName ?? "exercise").lowercased()
+        for group in groups {
+            let exerciseSets = group.sets
+            let displayName = group.name.lowercased()
             let count = exerciseSets.count
             let totalReps = exerciseSets.reduce(0) { $0 + $1.reps }
             let topWeight = exerciseSets.map(\.weightLbs).max() ?? 0
@@ -55,7 +50,7 @@ enum SummaryGenerator {
 
         let totalVolume = TrainingMath.volumeLoad(sets: sets)
         let calories = TrainingMath.estimatedCalories(session: session, cardio: sortedCardio, bodyWeightLbs: profile.weightLbs)
-        let exerciseCount = order.count
+        let exerciseCount = groups.count
         let exerciseWord = exerciseCount == 1 ? "exercise" : "exercises"
 
         for entry in sortedCardio {
@@ -91,7 +86,7 @@ enum SummaryGenerator {
             lines.append("")
         }
 
-        if let firstId = order.first, let firstName = grouped[firstId]?.first?.exerciseName.lowercased() {
+        if let firstName = groups.first?.name.lowercased() {
             lines.append("For progressive overload, compare today's top \(firstName) set with last week's \u{2014} small, steady increases beat big jumps. The week-in-context notes below do this comparison for you automatically.")
             lines.append("")
         }

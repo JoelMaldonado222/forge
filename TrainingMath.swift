@@ -151,6 +151,33 @@ enum TrainingMath {
         return out
     }
 
+    /// Sets grouped by exercise, in the order the exercises were logged,
+    /// each group's sets sorted by set number. Sets from before v7 have no
+    /// saved order, so they fall back to alphabetical — stable, at least,
+    /// instead of reshuffling every time the app reloads.
+    static func exerciseGroups(sets: [LoggedSet]) -> [ExerciseGroup] {
+        var byID: [String: [LoggedSet]] = [:]
+        for set in sets {
+            byID[set.exerciseId, default: []].append(set)
+        }
+        let groups = byID.map { id, groupSets in
+            ExerciseGroup(
+                id: id,
+                name: groupSets.first?.exerciseName ?? "Exercise",
+                order: groupSets.compactMap(\.exerciseOrder).min(),
+                sets: groupSets.sorted { $0.setNumber < $1.setNumber }
+            )
+        }
+        return groups.sorted { a, b in
+            switch (a.order, b.order) {
+            case let (x?, y?) where x != y: return x < y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        }
+    }
+
     /// Cardio bouts logged in the same workout as `session`. The workout
     /// screen stamps each cardio entry with the session's start time, so a
     /// match is "same owner, start times within a couple of seconds" (the
@@ -174,6 +201,15 @@ enum TrainingMath {
         }
         return sliced.map { MuscleVolume(group: $0.key, volume: $0.value) }
     }
+}
+
+/// One exercise's sets within a workout, for recaps and session detail.
+struct ExerciseGroup: Identifiable {
+    let id: String
+    let name: String
+    /// Position in the workout, nil for sets saved before v7.
+    let order: Int?
+    let sets: [LoggedSet]
 }
 
 /// A muscle group paired with its attributed training volume.

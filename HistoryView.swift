@@ -320,17 +320,9 @@ struct SessionDetailView: View {
         TrainingMath.cardio(for: session, in: allCardio.filter { $0.ownerID == profile.id })
     }
 
-    private var grouped: [(id: String, name: String, sets: [LoggedSet])] {
-        var order: [String] = []
-        var dict: [String: [LoggedSet]] = [:]
-        for set in session.sets {
-            if dict[set.exerciseId] == nil { order.append(set.exerciseId) }
-            dict[set.exerciseId, default: []].append(set)
-        }
-        return order.compactMap { id in
-            guard let sets = dict[id] else { return nil }
-            return (id, sets.first?.exerciseName ?? "Exercise", sets.sorted { $0.setNumber < $1.setNumber })
-        }
+    /// Exercises in the order they were logged.
+    private var grouped: [ExerciseGroup] {
+        TrainingMath.exerciseGroups(sets: session.sets)
     }
 
     var body: some View {
@@ -341,7 +333,7 @@ struct SessionDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .forgeCard(cornerRadius: 12)
 
-                ForEach(grouped, id: \.id) { group in
+                ForEach(grouped) { group in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(group.name)
                             .font(.headline)

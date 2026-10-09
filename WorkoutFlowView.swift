@@ -8,6 +8,11 @@ struct WorkoutFlowView: View {
     @State private var draftStartTime = Date()
     @State private var finishedSession: WorkoutSession?
     @State private var finishedCardio: [CardioEntry] = []
+    /// An unfinished workout found on disk, offered on the home screen.
+    @State private var savedDraft: WorkoutDraftSnapshot?
+    /// The draft the logging screen should open with (nil = fresh workout).
+    @State private var resumeDraft: WorkoutDraftSnapshot?
+    @State private var showReplaceConfirm = false
 
     enum Route: Hashable {
         case active
@@ -16,11 +21,31 @@ struct WorkoutFlowView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            WorkoutHomeView {
-                draftStartTime = Date()
-                finishedSession = nil
-                finishedCardio = []
-                path.append(Route.active)
+            WorkoutHomeView(
+                savedDraft: savedDraft,
+                onNewWorkout: {
+                    if savedDraft != nil {
+                        showReplaceConfirm = true
+                    } else {
+                        beginWorkout(from: nil)
+                    }
+                },
+                onResume: { beginWorkout(from: savedDraft) },
+                onDiscard: {
+                    WorkoutDraftStore.clear(ownerID: profile.id)
+                    savedDraft = nil
+                }
+            )
+            .onAppear { savedDraft = WorkoutDraftStore.load(ownerID: profile.id) }
+            .confirmationDialog("Start a new workout?", isPresented: $showReplaceConfirm, titleVisibility: .visible) {
+                Button("Discard unfinished and start new", role: .destructive) {
+                    WorkoutDraftStore.clear(ownerID: profile.id)
+                    savedDraft = nil
+                    beginWorkout(from: nil)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You have an unfinished workout. Starting a new one throws it away \u{2014} tap Resume instead to keep it.")
             }
             .navigationDestination(for: Route.self) { route in
                 switch route {
@@ -29,10 +54,13 @@ struct WorkoutFlowView: View {
                         ownerID: profile.id,
                         bodyweightLbs: profile.weightLbs,
                         startTime: draftStartTime,
-                        initialExercises: []
+                        initialExercises: [],
+                        restoredDraft: resumeDraft
                     ) { session, cardio in
                         finishedSession = session
                         finishedCardio = cardio
+                        savedDraft = nil
+                        resumeDraft = nil
                         // Replace the logging screen with the summary rather
                         // than stacking on top of it. Otherwise "back" from the
                         // summary lands on the still-filled logging screen and
@@ -41,6 +69,9 @@ struct WorkoutFlowView: View {
                         summaryOnly.append(Route.summary)
                         path = summaryOnly
                     } onCancel: {
+                        WorkoutDraftStore.clear(ownerID: profile.id)
+                        savedDraft = nil
+                        resumeDraft = nil
                         finishedSession = nil
                         finishedCardio = []
                         path = NavigationPath()
@@ -60,12 +91,26 @@ struct WorkoutFlowView: View {
             .navigationTitle("Workout")
         }
     }
+
+    /// Opens the logging screen, fresh or from a saved draft.
+    private func beginWorkout(from draft: WorkoutDraftSnapshot?) {
+        draftStartTime = draft?.startTime ?? Date()
+        resumeDraft = draft
+        finishedSession = nil
+        finishedCardio = []
+        path.append(Route.active)
+    }
 }
 
 // MARK: - Home
 
 struct WorkoutHomeView: View {
+    var savedDraft: WorkoutDraftSnapshot?
     var onNewWorkout: () -> Void
+    var onResume: () -> Void
+    var onDiscard: () -> Void
+
+    @State private var showDiscardConfirm = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -81,9 +126,40 @@ struct WorkoutHomeView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 32)
-            Button("New Workout", action: onNewWorkout)
-                .buttonStyle(VoltButtonStyle())
-                .controlSize(.large)
+
+            if let savedDraft {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Unfinished workout", systemImage: "clock.arrow.circlepath")
+                        .font(.headline)
+                        .foregroundStyle(ForgeTheme.volt)
+                    Text("Started \(savedDraft.startTime.formatted(.dateTime.weekday(.wide).hour().minute())) \u{00B7} \(savedDraft.summary)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button("Resume", action: onResume)
+                            .buttonStyle(VoltButtonStyle())
+                        Spacer()
+                        Button("Discard", role: .destructive) { showDiscardConfirm = true }
+                            .foregroundStyle(ForgeTheme.danger)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .forgeCard()
+                .padding(.horizontal)
+                .confirmationDialog("Discard the unfinished workout?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
+                    Button("Discard workout", role: .destructive, action: onDiscard)
+                    Button("Keep it", role: .cancel) {}
+                } message: {
+                    Text("Its sets were never saved to History and will be gone.")
+                }
+
+                Button("Start a new workout instead", action: onNewWorkout)
+                    .font(.subheadline)
+            } else {
+                Button("New Workout", action: onNewWorkout)
+                    .buttonStyle(VoltButtonStyle())
+                    .controlSize(.large)
+            }
             Spacer()
         }
         .navigationTitle("Workout")
@@ -212,7 +288,8 @@ enum LoggingField: Hashable {
 
 /// What the logging screen's drafts turn into once validated.
 private struct WorkoutCheck {
-    var lifts: [(definition: ExerciseDefinition, reps: Int, weight: Double)] = []
+    /// `order` is the exercise's position on the logging screen.
+    var lifts: [(definition: ExerciseDefinition, order: Int, reps: Int, weight: Double)] = []
     var cardio: [(definition: ExerciseDefinition, minutes: Double, miles: Double?)] = []
     /// Typos that block saving (e.g. "185.5.5" lb). Saving them would
     /// silently log the wrong number, so the user fixes them first.
@@ -242,7 +319,7 @@ struct ActiveWorkoutView: View {
 
     @Environment(\.modelContext) private var context
     @State private var exerciseDrafts: [ExerciseDraft]
-    @State private var cardioDrafts: [CardioDraft] = []
+    @State private var cardioDrafts: [CardioDraft]
     @State private var showAddSheet = false
     @State private var showCardioSheet = false
     @State private var showFinishConfirm = false
@@ -257,18 +334,31 @@ struct ActiveWorkoutView: View {
     @State private var isSaving = false
     @FocusState private var focusedField: LoggingField?
 
-    init(ownerID: UUID, bodyweightLbs: Double, startTime: Date, initialExercises: [ExerciseDefinition], onFinish: @escaping (WorkoutSession, [CardioEntry]) -> Void, onCancel: @escaping () -> Void) {
+    /// - Parameter restoredDraft: an unfinished workout loaded from disk;
+    ///   when present it replaces `initialExercises`.
+    init(ownerID: UUID, bodyweightLbs: Double, startTime: Date, initialExercises: [ExerciseDefinition], restoredDraft: WorkoutDraftSnapshot? = nil, onFinish: @escaping (WorkoutSession, [CardioEntry]) -> Void, onCancel: @escaping () -> Void) {
         self.ownerID = ownerID
         self.bodyweightLbs = bodyweightLbs
         self.startTime = startTime
         self.onFinish = onFinish
         self.onCancel = onCancel
-        _exerciseDrafts = State(initialValue: initialExercises.map {
-            ExerciseDraft(definition: $0, sets: [SetDraft(weight: $0.usesBodyweight ? ForgeInput.display(bodyweightLbs) : "")])
-        })
+        if let restoredDraft, restoredDraft.ownerID == ownerID {
+            _exerciseDrafts = State(initialValue: restoredDraft.exerciseDrafts())
+            _cardioDrafts = State(initialValue: restoredDraft.cardioDrafts())
+        } else {
+            _exerciseDrafts = State(initialValue: initialExercises.map {
+                ExerciseDraft(definition: $0, sets: [SetDraft(weight: $0.usesBodyweight ? ForgeInput.display(bodyweightLbs) : "")])
+            })
+            _cardioDrafts = State(initialValue: [])
+        }
     }
 
     private var isEmptyWorkout: Bool { exerciseDrafts.isEmpty && cardioDrafts.isEmpty }
+
+    /// Everything on screen, in a form that can be written to disk.
+    private var snapshot: WorkoutDraftSnapshot {
+        WorkoutDraftSnapshot(ownerID: ownerID, startTime: startTime, exerciseDrafts: exerciseDrafts, cardioDrafts: cardioDrafts)
+    }
 
     private var removalBinding: Binding<Bool> {
         Binding(
@@ -342,6 +432,12 @@ struct ActiveWorkoutView: View {
             .animation(.snappy, value: cardioDrafts.map(\.id))
         }
         .scrollDismissesKeyboard(.interactively)
+        // Autosave: every edit is written to a small file, so if iOS closes
+        // Forge mid-workout (common when switching to music or the camera),
+        // the Workout tab offers to resume exactly where you left off.
+        .onChange(of: snapshot) {
+            if !isSaving { WorkoutDraftStore.save(snapshot) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         // No system back button: a back swipe used to throw away the whole
         // workout with no warning. Cancel (with confirmation) is the way out.
@@ -501,7 +597,7 @@ struct ActiveWorkoutView: View {
     private func checkWorkout() -> WorkoutCheck {
         var check = WorkoutCheck()
 
-        for draft in exerciseDrafts {
+        for (exerciseIndex, draft) in exerciseDrafts.enumerated() {
             let name = draft.definition.name
             for (index, set) in draft.sets.enumerated() {
                 let label = "\(name) set \(index + 1)"
@@ -525,7 +621,7 @@ struct ActiveWorkoutView: View {
                     }
                     weight = typed
                 }
-                check.lifts.append((draft.definition, reps, weight))
+                check.lifts.append((draft.definition, exerciseIndex, reps, weight))
             }
         }
 
@@ -600,7 +696,8 @@ struct ActiveWorkoutView: View {
                 exerciseName: entry.definition.name,
                 setNumber: number,
                 reps: entry.reps,
-                weightLbs: entry.weight
+                weightLbs: entry.weight,
+                exerciseOrder: entry.order
             ))
         }
         context.insert(session)
@@ -636,6 +733,8 @@ struct ActiveWorkoutView: View {
             showSaveError = true
             return
         }
+        // It's in History now, so the autosaved draft has done its job.
+        WorkoutDraftStore.clear(ownerID: ownerID)
         onFinish(session, entries)
     }
 }
@@ -835,5 +934,120 @@ struct SetRowView: View {
                 .accessibilityLabel("Delete set \(setNumber)")
             }
         }
+    }
+}
+
+// MARK: - Workout autosave
+
+/// A Codable copy of the logging screen: which exercises, and exactly what
+/// was typed in each box (kept as text, so a half-typed "18" comes back as
+/// "18"). Not a SwiftData model — it's a throwaway file, so it can never
+/// affect the database schema.
+struct WorkoutDraftSnapshot: Codable, Equatable {
+    struct Exercise: Codable, Equatable {
+        var exerciseId: String
+        var sets: [SetEntry]
+    }
+
+    struct SetEntry: Codable, Equatable {
+        var reps: String
+        var weight: String
+    }
+
+    struct Cardio: Codable, Equatable {
+        var exerciseId: String
+        var minutes: String
+        var miles: String
+    }
+
+    var ownerID: UUID
+    var startTime: Date
+    var exercises: [Exercise]
+    var cardio: [Cardio]
+
+    var isEmpty: Bool { exercises.isEmpty && cardio.isEmpty }
+
+    /// "3 exercises, 1 cardio" for the resume card.
+    var summary: String {
+        var parts: [String] = []
+        if !exercises.isEmpty {
+            parts.append("\(exercises.count) \(exercises.count == 1 ? "exercise" : "exercises")")
+        }
+        if !cardio.isEmpty {
+            parts.append("\(cardio.count) cardio")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    init(ownerID: UUID, startTime: Date, exerciseDrafts: [ExerciseDraft], cardioDrafts: [CardioDraft]) {
+        self.ownerID = ownerID
+        self.startTime = startTime
+        self.exercises = exerciseDrafts.map { draft in
+            Exercise(
+                exerciseId: draft.definition.id,
+                sets: draft.sets.map { SetEntry(reps: $0.reps, weight: $0.weight) }
+            )
+        }
+        self.cardio = cardioDrafts.map {
+            Cardio(exerciseId: $0.definition.id, minutes: $0.minutes, miles: $0.miles)
+        }
+    }
+
+    /// Back to editable drafts. Exercises no longer in the library are skipped.
+    func exerciseDrafts() -> [ExerciseDraft] {
+        exercises.compactMap { saved in
+            guard let definition = ExerciseLibrary.definition(for: saved.exerciseId) else { return nil }
+            let sets = saved.sets.map { SetDraft(reps: $0.reps, weight: $0.weight) }
+            return ExerciseDraft(definition: definition, sets: sets.isEmpty ? [SetDraft()] : sets)
+        }
+    }
+
+    func cardioDrafts() -> [CardioDraft] {
+        cardio.compactMap { saved in
+            guard let definition = ExerciseLibrary.definition(for: saved.exerciseId) else { return nil }
+            return CardioDraft(definition: definition, minutes: saved.minutes, miles: saved.miles)
+        }
+    }
+}
+
+/// Reads and writes the unfinished-workout file. One file per profile, so
+/// profiles never see each other's drafts. Lives in Application Support
+/// (UserDefaults only ever holds the active profile ID).
+enum WorkoutDraftStore {
+    private static func fileURL(for ownerID: UUID) -> URL? {
+        guard let folder = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        return folder.appendingPathComponent("unfinished-workout-\(ownerID.uuidString).json")
+    }
+
+    /// The saved draft for this profile, or nil when there isn't a usable one.
+    static func load(ownerID: UUID) -> WorkoutDraftSnapshot? {
+        guard let url = fileURL(for: ownerID),
+              let data = try? Data(contentsOf: url),
+              let draft = try? JSONDecoder().decode(WorkoutDraftSnapshot.self, from: data),
+              draft.ownerID == ownerID,
+              !draft.isEmpty
+        else { return nil }
+        return draft
+    }
+
+    /// Writes the draft, or removes the file when there's nothing to keep.
+    static func save(_ draft: WorkoutDraftSnapshot) {
+        guard !draft.isEmpty else {
+            clear(ownerID: draft.ownerID)
+            return
+        }
+        guard let url = fileURL(for: draft.ownerID),
+              let data = try? JSONEncoder().encode(draft) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func clear(ownerID: UUID) {
+        guard let url = fileURL(for: ownerID) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 }

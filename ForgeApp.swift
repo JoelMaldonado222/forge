@@ -51,6 +51,13 @@ struct RootView: View {
                     .id(profile.id)
             }
             .tint(ForgeTheme.volt)
+            // On launch, if iOS closed Forge mid-workout, open straight onto
+            // the Workout tab where the Resume card is waiting.
+            .task {
+                if WorkoutDraftStore.load(ownerID: profile.id) != nil {
+                    selectedTab = 1
+                }
+            }
         } else {
             OnboardingView()
         }

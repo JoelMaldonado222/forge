@@ -38,6 +38,9 @@ struct BackupLoggedSet: Codable {
     var setNumber: Int
     var reps: Int
     var weightLbs: Double
+    /// Added in v7. Optional, so backups from earlier versions (which don't
+    /// have the key) still decode, and schemaVersion stays 1.
+    var exerciseOrder: Int?
 }
 
 struct BackupSession: Codable {
@@ -124,7 +127,8 @@ enum BackupManager {
                               sets: s.sets.map { ls in
                                   BackupLoggedSet(id: ls.id, exerciseId: ls.exerciseId,
                                                   exerciseName: ls.exerciseName, setNumber: ls.setNumber,
-                                                  reps: ls.reps, weightLbs: ls.weightLbs)
+                                                  reps: ls.reps, weightLbs: ls.weightLbs,
+                                                  exerciseOrder: ls.exerciseOrder)
                               })
             },
             waterLogs: waterLogs.map { w in
@@ -218,7 +222,8 @@ enum BackupManager {
             context.insert(session)
             for bs in s.sets {
                 let set = LoggedSet(id: bs.id, exerciseId: bs.exerciseId, exerciseName: bs.exerciseName,
-                                    setNumber: bs.setNumber, reps: bs.reps, weightLbs: bs.weightLbs)
+                                    setNumber: bs.setNumber, reps: bs.reps, weightLbs: bs.weightLbs,
+                                    exerciseOrder: bs.exerciseOrder)
                 set.session = session
                 session.sets.append(set)
                 context.insert(set)

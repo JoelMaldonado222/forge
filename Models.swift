@@ -113,14 +113,21 @@ final class LoggedSet {
     var reps: Int
     var weightLbs: Double
     @Relationship(inverse: \WorkoutSession.sets) var session: WorkoutSession?
+    /// Position of this set's exercise in the workout (0 = first exercise
+    /// logged). SwiftData doesn't keep the order of `WorkoutSession.sets`,
+    /// so without this the recap and History reshuffle exercises on reload.
+    /// v7 ADDITIVE field: optional, so existing stores migrate untouched;
+    /// sets saved before v7 read back as nil.
+    var exerciseOrder: Int?
 
-    init(id: UUID = UUID(), exerciseId: String, exerciseName: String, setNumber: Int, reps: Int, weightLbs: Double) {
+    init(id: UUID = UUID(), exerciseId: String, exerciseName: String, setNumber: Int, reps: Int, weightLbs: Double, exerciseOrder: Int? = nil) {
         self.id = id
         self.exerciseId = exerciseId
         self.exerciseName = exerciseName
         self.setNumber = setNumber
         self.reps = reps
         self.weightLbs = weightLbs
+        self.exerciseOrder = exerciseOrder
     }
 }
 
