@@ -16,9 +16,11 @@ struct Body3DView: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
         view.scene = context.coordinator.buildScene()
-        view.backgroundColor = UIColor(red: 0.05, green: 0.07, blue: 0.11, alpha: 1.0)
+        view.backgroundColor = ForgeTheme.sceneBackground
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
+        view.antialiasingMode = .multisampling4X
+        context.coordinator.highlight(intensities: intensities)
         return view
     }
 
@@ -28,22 +30,23 @@ struct Body3DView: UIViewRepresentable {
 
     final class Coordinator {
         private var materials: [MuscleGroup: SCNMaterial] = [:]
+        /// Last applied intensities, so re-renders that don't change the
+        /// training data don't touch SceneKit at all.
+        private var lastApplied: [MuscleGroup: Double]?
 
-        /// Matte light-grey "anatomy chart" tone for untrained structure.
         private let neutralMaterial: SCNMaterial = {
             let material = SCNMaterial()
-            material.diffuse.contents = UIColor(red: 0.60, green: 0.60, blue: 0.63, alpha: 1.0)
-            material.specular.contents = UIColor(white: 0.15, alpha: 1.0)
+            material.diffuse.contents = ForgeTheme.figureNeutral
+            material.specular.contents = ForgeTheme.figureNeutralSpecular
             return material
         }()
 
         private func material(for group: MuscleGroup) -> SCNMaterial {
             if let existing = materials[group] { return existing }
             let material = SCNMaterial()
-            // Slightly darker grey than neutral so the volt glow pops.
-            material.diffuse.contents = UIColor(red: 0.50, green: 0.50, blue: 0.54, alpha: 1.0)
-            material.specular.contents = UIColor(white: 0.20, alpha: 1.0)
-            material.emission.contents = UIColor.black
+            material.diffuse.contents = ForgeTheme.figureMuscle
+            material.specular.contents = ForgeTheme.figureMuscleSpecular
+            material.emission.contents = ForgeTheme.voltGlow(0)
             materials[group] = material
             return material
         }
@@ -145,15 +148,11 @@ struct Body3DView: UIViewRepresentable {
         /// Sets the volt emissive glow per muscle group. Values are clamped
         /// to 0...1; untrained groups stay matte grey.
         func highlight(intensities: [MuscleGroup: Double]) {
+            guard intensities != lastApplied else { return }
+            lastApplied = intensities
             for group in MuscleGroup.allCases {
                 guard let material = materials[group] else { continue }
-                let clamped = CGFloat(min(max(intensities[group] ?? 0, 0), 1))
-                material.emission.contents = UIColor(
-                    red: 0.78 * clamped,
-                    green: 1.0 * clamped,
-                    blue: 0.02 * clamped,
-                    alpha: 1.0
-                )
+                material.emission.contents = ForgeTheme.voltGlow(intensities[group] ?? 0)
             }
         }
     }

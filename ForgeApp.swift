@@ -92,7 +92,7 @@ struct OnboardingView: View {
 
                 if let errorMessage {
                     Section {
-                        Text(errorMessage).foregroundStyle(.red)
+                        Text(errorMessage).foregroundStyle(ForgeTheme.danger)
                     }
                 }
 
@@ -101,25 +101,26 @@ struct OnboardingView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Welcome to Forge")
         }
     }
 
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             errorMessage = "Please enter your name."
             return
         }
-        guard let height = Double(heightText.trimmingCharacters(in: .whitespaces)), height > 0 else {
+        guard let height = ForgeInput.decimal(heightText), height > 0, height < 120 else {
             errorMessage = "Enter a valid height in inches."
             return
         }
-        guard let weight = Double(weightText.trimmingCharacters(in: .whitespaces)), weight > 0 else {
+        guard let weight = ForgeInput.decimal(weightText), weight > 0, weight < 1000 else {
             errorMessage = "Enter a valid weight in pounds."
             return
         }
-        guard let age = Int(ageText.trimmingCharacters(in: .whitespaces)), age > 0, age < 120 else {
+        guard let age = ForgeInput.whole(ageText), age > 0, age < 120 else {
             errorMessage = "Enter a valid age."
             return
         }
@@ -132,7 +133,13 @@ struct OnboardingView: View {
             goal: goal
         )
         context.insert(profile)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            errorMessage = "Couldn't save your profile: \(error.localizedDescription)"
+            return
+        }
         activeProfileID = profile.id.uuidString
         errorMessage = nil
     }

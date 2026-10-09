@@ -48,20 +48,9 @@ struct WorkoutSummaryView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Session recap")
-                        .font(.headline)
-                    Text(recap)
-                        .font(.body)
-                }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.horizontal)
-
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     StatTile(title: "Total volume", value: "\(Int(totalVolume)) lb", icon: "scalemass")
-                    StatTile(title: "Est. calories", value: "\(Int(calories))", icon: "flame")
+                    StatTile(title: "Est. calories", value: "~\(Int(calories))", icon: "flame")
                     StatTile(title: "Exercises", value: "\(exerciseCount)", icon: "dumbbell")
                     StatTile(title: "Duration", value: durationText, icon: "timer")
                     if cardioMinutes > 0 {
@@ -80,9 +69,18 @@ struct WorkoutSummaryView: View {
                         .frame(height: 300)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .forgeCard()
+                .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Session recap")
+                        .font(.headline)
+                    Text(recap)
+                        .font(.body)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .forgeCard()
                 .padding(.horizontal)
 
                 Button("Done", action: onDone)
@@ -112,13 +110,15 @@ struct StatTile: View {
             Text(value)
                 .font(.title3)
                 .bold()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
-        .background(Color(.secondarySystemBackground))
+        .background(ForgeTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }

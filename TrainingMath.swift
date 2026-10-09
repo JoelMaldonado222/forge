@@ -25,12 +25,10 @@ enum TrainingMath {
         return met * 3.5 * kg / 200.0 * minutes
     }
 
-    /// Common hydration guidance: ~2/3 oz of water per pound of bodyweight.
-    /// For a 180 lb adult that's ~120 oz (~3.5 L), in line with guidance
-    /// that active adults need roughly 3–4+ liters of total water per day
-    /// (IOM adequate intake is 3.7 L/day for men, 2.7 for women, before
-    /// exercise is factored in). A coaching heuristic, not clinical advice.
-    /// Daily water target: a flat 1 gallon (128 oz).
+    /// Daily water target: a flat 1 gallon (128 oz, ~3.8 L), close to the
+    /// IOM adequate intake of 3.7 L/day for men (2.7 L for women) before
+    /// exercise. A coaching heuristic, not clinical advice. `weightLbs` is
+    /// kept so a bodyweight-scaled target can return without API churn.
     static func waterTargetOz(weightLbs: Double) -> Double {
         128
     }
@@ -151,6 +149,18 @@ enum TrainingMath {
             }
         }
         return out
+    }
+
+    /// Cardio bouts logged in the same workout as `session`. The workout
+    /// screen stamps each cardio entry with the session's start time, so a
+    /// match is "same owner, start times within a couple of seconds" (the
+    /// slack covers backups, which store dates to the whole second). This
+    /// keeps two workouts on the same day from showing each other's cardio.
+    static func cardio(for session: WorkoutSession, in entries: [CardioEntry]) -> [CardioEntry] {
+        entries.filter {
+            $0.ownerID == session.ownerID
+                && abs($0.date.timeIntervalSince(session.startTime)) < 2
+        }
     }
 
     /// Muscle groups ranked by attributed volume, highest first.

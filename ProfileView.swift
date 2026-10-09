@@ -6,24 +6,31 @@ struct ProfileView: View {
     var profile: UserProfile
     @Environment(\.modelContext) private var context
 
+    private enum Field: Hashable {
+        case name, height, weight, age, pin
+    }
+
+    @FocusState private var focusedField: Field?
     @State private var name: String
     @State private var heightText: String
     @State private var weightText: String
     @State private var ageText: String
     @State private var goal: String
     @State private var pinText: String
-    @State private var savedMessage: String?
+    @State private var status: (message: String, isError: Bool)?
 
     init(profile: UserProfile) {
         self.profile = profile
         _name = State(initialValue: profile.name)
-        _heightText = State(initialValue: String(format: "%g", profile.heightInches))
-        _weightText = State(initialValue: String(format: "%g", profile.weightLbs))
+        _heightText = State(initialValue: ForgeInput.display(profile.heightInches))
+        _weightText = State(initialValue: ForgeInput.display(profile.weightLbs))
         _ageText = State(initialValue: "\(profile.age)")
         _goal = State(initialValue: profile.goal)
         _pinText = State(initialValue: profile.pin ?? "")
-        _savedMessage = State(initialValue: nil)
     }
+
+    /// Every editable value, so any edit clears a stale "Saved." message.
+    private var formValues: [String] { [name, heightText, weightText, ageText, goal, pinText] }
 
     var body: some View {
         NavigationStack {
@@ -31,12 +38,25 @@ struct ProfileView: View {
                 Section("Profile") {
                     TextField("Name", text: $name)
                         .textContentType(.name)
-                    TextField("Height (inches)", text: $heightText)
-                        .keyboardType(.decimalPad)
-                    TextField("Weight (lbs)", text: $weightText)
-                        .keyboardType(.decimalPad)
-                    TextField("Age", text: $ageText)
-                        .keyboardType(.numberPad)
+                        .focused($focusedField, equals: .name)
+                    LabeledContent("Height (in)") {
+                        TextField("Inches", text: $heightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .height)
+                    }
+                    LabeledContent("Weight (lb)") {
+                        TextField("Pounds", text: $weightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .weight)
+                    }
+                    LabeledContent("Age") {
+                        TextField("Years", text: $ageText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .age)
+                    }
                     Picker("Goal", selection: $goal) {
                         ForEach(FitnessGoals.all, id: \.self) { Text($0) }
                     }
@@ -45,25 +65,29 @@ struct ProfileView: View {
                 Section("Daily targets") {
                     let water = TrainingMath.waterTargetOz(weightLbs: profile.weightLbs)
                     let proteinRange = TrainingMath.proteinTargetRangeG(weightLbs: profile.weightLbs)
-                    HStack {
-                        Text("Water")
-                        Spacer()
-                        Text("\(Int(water)) oz/day")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Protein")
-                        Spacer()
-                        Text("\(Int(proteinRange.low))\u{2013}\(Int(proteinRange.high)) g/day")
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("Evidence-based targets: 1.6\u{2013}2.2 g of protein per kg of bodyweight per day (Morton et al. 2018). Water target is a flat 1 gallon (128 oz) a day. Protein targets update automatically when you save new stats. They are coaching heuristics, not medical advice.")
+                    LabeledContent("Water", value: "\(Int(water)) oz/day")
+                    LabeledContent("Protein", value: "\(Int(proteinRange.low))\u{2013}\(Int(proteinRange.high)) g/day")
+                    Text("Protein range: 1.6\u{2013}2.2 g per kg of bodyweight per day (Morton et al. 2018). Water target is a flat 1 gallon (128 oz) a day. Protein updates when you save a new weight. These are coaching estimates, not medical advice.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Profile PIN") {
+                    SecureField("4-digit PIN (optional)", text: $pinText)
+                        .keyboardType(.numberPad)
+                        .focused($focusedField, equals: .pin)
+                    Text("Asked for before switching to this profile. Stored as plain text \u{2014} casual privacy, not encryption. Leave blank for no PIN.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Section {
                     Button("Save changes", action: save)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    if let status {
+                        Text(status.message)
+                            .foregroundStyle(status.isError ? ForgeTheme.danger : ForgeTheme.success)
+                    }
                 }
 
                 Section("Profiles") {
@@ -72,7 +96,7 @@ struct ProfileView: View {
                     } label: {
                         Label("Switch profile", systemImage: "person.2")
                     }
-                    Text("Everyone gets their own profile — workouts, water, and food never mix between profiles.")
+                    Text("Everyone gets their own profile \u{2014} workouts, water, and food never mix between profiles.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -87,34 +111,32 @@ struct ProfileView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
-                Section("Profile PIN") {
-                    SecureField("4-digit PIN (optional)", text: $pinText)
-                        .keyboardType(.numberPad)
-                    Text("Asked for before switching to this profile. Stored as plain text — casual privacy, not encryption. Leave blank for no PIN.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let savedMessage {
-                    Section {
-                        Text(savedMessage)
-                            .foregroundStyle(savedMessage == "Saved." ? .green : .red)
-                    }
-                }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Profile")
+            .onChange(of: formValues) {
+                status = nil
+            }
         }
     }
 
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty,
-              let height = Double(heightText.trimmingCharacters(in: .whitespaces)), height > 0,
-              let weight = Double(weightText.trimmingCharacters(in: .whitespaces)), weight > 0,
-              let age = Int(ageText.trimmingCharacters(in: .whitespaces)), age > 0, age < 120
-        else {
-            savedMessage = "Check your entries \u{2014} name, height, weight, and age must all be valid."
+        focusedField = nil
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            status = (message: "Please enter a name.", isError: true)
+            return
+        }
+        guard let height = ForgeInput.decimal(heightText), height > 0, height < 120 else {
+            status = (message: "Enter your height in inches (for example 70).", isError: true)
+            return
+        }
+        guard let weight = ForgeInput.decimal(weightText), weight > 0, weight < 1000 else {
+            status = (message: "Enter your weight in pounds.", isError: true)
+            return
+        }
+        guard let age = ForgeInput.whole(ageText), age > 0, age < 120 else {
+            status = (message: "Enter a valid age.", isError: true)
             return
         }
 
@@ -122,7 +144,7 @@ struct ProfileView: View {
         if !pin.isEmpty {
             let digits = CharacterSet.decimalDigits
             guard pin.count == 4, pin.unicodeScalars.allSatisfy({ digits.contains($0) }) else {
-                savedMessage = "The PIN must be exactly 4 digits, or left blank."
+                status = (message: "The PIN must be exactly 4 digits, or left blank.", isError: true)
                 return
             }
         }
@@ -133,7 +155,12 @@ struct ProfileView: View {
         profile.age = age
         profile.goal = goal
         profile.pin = pin.isEmpty ? nil : pin
-        try? context.save()
-        savedMessage = "Saved."
+        do {
+            try context.save()
+            status = (message: "Saved.", isError: false)
+        } catch {
+            context.rollback()
+            status = (message: "Couldn't save: \(error.localizedDescription)", isError: true)
+        }
     }
 }

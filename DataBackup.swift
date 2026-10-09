@@ -82,6 +82,7 @@ struct BackupCardioEntry: Codable {
 enum BackupError: LocalizedError {
     case unsupportedVersion(Int)
     case notABackup
+    case restoreIncomplete(String)
 
     var errorDescription: String? {
         switch self {
@@ -89,6 +90,8 @@ enum BackupError: LocalizedError {
             return "This backup was made by a newer version of Forge (schema v\(v)). Update Forge, then try again."
         case .notABackup:
             return "That file doesn't look like a Forge backup."
+        case .restoreIncomplete(let reason):
+            return "The restore stopped partway (\(reason)). Your backup file is fine \u{2014} run Restore again with the same file."
         }
     }
 }
@@ -144,6 +147,7 @@ enum BackupManager {
         let data = try encoder.encode(backup)
 
         let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
         stamp.dateFormat = "yyyy-MM-dd-HHmm"
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Forge-Backup-\(stamp.string(from: Date())).json")
@@ -179,15 +183,28 @@ enum BackupManager {
             throw BackupError.unsupportedVersion(backup.schemaVersion)
         }
 
-        // Wipe current data. (Sessions cascade-delete their sets; sets are
-        // also deleted explicitly in case any are orphaned.)
-        for session in try context.fetch(FetchDescriptor<WorkoutSession>()) { context.delete(session) }
-        for set in try context.fetch(FetchDescriptor<LoggedSet>()) { context.delete(set) }
-        for w in try context.fetch(FetchDescriptor<WaterLog>()) { context.delete(w) }
-        for f in try context.fetch(FetchDescriptor<FoodEntry>()) { context.delete(f) }
-        for c in try context.fetch(FetchDescriptor<CardioEntry>()) { context.delete(c) }
-        for p in try context.fetch(FetchDescriptor<UserProfile>()) { context.delete(p) }
+        // Phase 1: wipe current data and commit the wipe. The backup reuses
+        // the same unique IDs as the rows being deleted, and inserting an ID
+        // while its old row is still pending deletion in the same save is
+        // undefined territory for SwiftData's unique constraint. Committing
+        // the delete first keeps phase 2 a clean insert.
+        // (Sessions cascade-delete their sets; sets are also deleted
+        // explicitly in case any are orphaned.)
+        do {
+            for session in try context.fetch(FetchDescriptor<WorkoutSession>()) { context.delete(session) }
+            for set in try context.fetch(FetchDescriptor<LoggedSet>()) { context.delete(set) }
+            for w in try context.fetch(FetchDescriptor<WaterLog>()) { context.delete(w) }
+            for f in try context.fetch(FetchDescriptor<FoodEntry>()) { context.delete(f) }
+            for c in try context.fetch(FetchDescriptor<CardioEntry>()) { context.delete(c) }
+            for p in try context.fetch(FetchDescriptor<UserProfile>()) { context.delete(p) }
+            try context.save()
+        } catch {
+            // Nothing was committed — the current data is untouched.
+            context.rollback()
+            throw error
+        }
 
+        // Phase 2: insert everything from the file.
         var summary = RestoreSummary()
         for b in backup.profiles {
             context.insert(UserProfile(id: b.id, name: b.name, heightInches: b.heightInches,
@@ -225,7 +242,14 @@ enum BackupManager {
             summary.cardioEntries += 1
         }
 
-        try context.save()
+        do {
+            try context.save()
+        } catch {
+            // Don't leave half-inserted rows sitting in the context. The
+            // backup file itself is untouched, so the restore can be retried.
+            context.rollback()
+            throw BackupError.restoreIncomplete(error.localizedDescription)
+        }
         return summary
     }
 }
@@ -284,7 +308,7 @@ struct BackupView: View {
             if let statusMessage {
                 Section {
                     Text(statusMessage)
-                        .foregroundStyle(statusIsError ? .red : .green)
+                        .foregroundStyle(statusIsError ? ForgeTheme.danger : ForgeTheme.success)
                 }
             }
         }
