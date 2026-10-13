@@ -7,15 +7,42 @@ import Foundation
 /// but they are not medical advice and should never be presented as exact.
 enum TrainingMath {
 
+    // MARK: What "volume" means
+    //
+    // Volume (a.k.a. volume load or tonnage) = weight × reps, added up over
+    // every set. 5 sets × 15 reps with the 45 lb bar = 5 × 15 × 45 = 3,375 lb.
+    //
+    // It is NOT force and NOT physical work (that would need how far the
+    // weight travelled). It's the standard sports-science bookkeeping number
+    // for "how much training did I do": if it creeps up week over week on
+    // the same lifts, you're doing more. Compare it lift-to-lift, not across
+    // lifts — 3,375 lb of curls and 3,375 lb of squats are not the same day.
+
     /// Total load moved: sum of (reps x weight) across every set, in pounds.
     static func volumeLoad(sets: [LoggedSet]) -> Double {
         sets.reduce(0) { $0 + Double($1.reps) * $1.weightLbs }
     }
 
     /// Epley estimated one-rep max. Only meaningful for low-rep sets;
-    /// callers should ignore results for sets above ~12 reps.
+    /// prefer `estimatedOneRepMax`, which applies the limits.
     static func epleyOneRepMax(weightLbs: Double, reps: Int) -> Double {
         weightLbs * (1.0 + Double(reps) / 30.0)
+    }
+
+    /// Estimated one-rep max, or nil when the set can't support a fair
+    /// estimate: more than 12 reps (the formula drifts badly past that) or
+    /// no weight. 1 rep returns the weight itself.
+    static func estimatedOneRepMax(weightLbs: Double, reps: Int) -> Double? {
+        guard weightLbs > 0, (1...12).contains(reps) else { return nil }
+        return reps == 1 ? weightLbs : epleyOneRepMax(weightLbs: weightLbs, reps: reps)
+    }
+
+    /// The load to prefill on a bodyweight move: the share of bodyweight it
+    /// actually moves (all of it for pull-ups, ~64% for push-ups), rounded to
+    /// the nearest pound. "" for exercises that aren't bodyweight moves.
+    static func bodyweightFill(for definition: ExerciseDefinition, bodyweightLbs: Double) -> String {
+        guard definition.usesBodyweight, bodyweightLbs > 0 else { return "" }
+        return ForgeInput.display((bodyweightLbs * definition.bodyweightFraction).rounded())
     }
 
     /// Rough calories burned from the standard MET equation:
@@ -77,14 +104,19 @@ enum TrainingMath {
         Set(session.sets.map(\.exerciseId)).count
     }
 
-    /// Estimated session calories. Assumes roughly 4 minutes of work per
-    /// distinct exercise block (sets + rest). Unknown exercises use MET 5.0.
+    /// Minutes each lifting set is assumed to take, rest included (~45 s of
+    /// work plus ~75 s of rest). Forge doesn't time workouts, so calories
+    /// scale with how many sets you did instead.
+    static let minutesPerSet = 2.0
+
+    /// Estimated lifting calories: MET × assumed minutes, per set. Five sets
+    /// now count five times as much as one (the old version gave every
+    /// exercise a flat 4 minutes no matter how many sets). Unknown
+    /// exercises use MET 5.0. A rough estimate — real burn varies a lot.
     static func estimatedCalories(session: WorkoutSession, bodyWeightLbs: Double) -> Double {
-        let minutesPerExercise = 4.0
-        let ids = Set(session.sets.map(\.exerciseId))
-        return ids.reduce(0.0) { total, id in
-            let met = ExerciseLibrary.definition(for: id)?.met ?? 5.0
-            return total + caloriesBurned(met: met, bodyWeightLbs: bodyWeightLbs, minutes: minutesPerExercise)
+        session.sets.reduce(0.0) { total, set in
+            let met = ExerciseLibrary.definition(for: set.exerciseId)?.met ?? 5.0
+            return total + caloriesBurned(met: met, bodyWeightLbs: bodyWeightLbs, minutes: minutesPerSet)
         }
     }
 

@@ -42,8 +42,18 @@ struct ExerciseDefinition: Identifiable, Hashable {
     /// True when the load IS the lifter (pull-ups, dips, push-ups...). The
     /// logging card offers one-tap fill from the profile's current bodyweight.
     let usesBodyweight: Bool
+    /// Share of bodyweight actually moved on a bodyweight move. Pull-ups and
+    /// dips lift (nearly) all of you; a push-up moves about 64% (your feet
+    /// carry the rest); a hanging leg raise moves only your legs. Used by
+    /// "Fill bodyweight" so the logged load is what you really lifted.
+    let bodyweightFraction: Double
+    /// True for lifts normally done with a barbell. The logging card reminds
+    /// you to enter the TOTAL weight, bar included, and offers an empty-bar fill.
+    let usesBarbell: Bool
+    /// Other names people search for ("military press", "shoulder fly").
+    let aliases: [String]
 
-    init(id: String, name: String, primary: [MuscleGroup], secondary: [MuscleGroup], met: Double, instructions: String, isCardio: Bool = false, usesBodyweight: Bool = false) {
+    init(id: String, name: String, primary: [MuscleGroup], secondary: [MuscleGroup], met: Double, instructions: String, isCardio: Bool = false, usesBodyweight: Bool = false, bodyweightFraction: Double = 1.0, usesBarbell: Bool = false, aliases: [String] = []) {
         self.id = id
         self.name = name
         self.primary = primary
@@ -52,6 +62,9 @@ struct ExerciseDefinition: Identifiable, Hashable {
         self.instructions = instructions
         self.isCardio = isCardio
         self.usesBodyweight = usesBodyweight
+        self.bodyweightFraction = bodyweightFraction
+        self.usesBarbell = usesBarbell
+        self.aliases = aliases
     }
 }
 

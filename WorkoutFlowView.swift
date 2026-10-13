@@ -132,7 +132,7 @@ struct WorkoutHomeView: View {
                     Label("Unfinished workout", systemImage: "clock.arrow.circlepath")
                         .font(.headline)
                         .foregroundStyle(ForgeTheme.volt)
-                    Text("Started \(savedDraft.startTime.formatted(.dateTime.weekday(.wide).hour().minute())) \u{00B7} \(savedDraft.summary)")
+                    Text("\(savedDraft.startTime.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) \u{00B7} \(savedDraft.summary)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     HStack {
@@ -179,17 +179,10 @@ struct ExercisePickerList: View {
         ExerciseLibrary.all.filter { !$0.isCardio }
     }
 
+    /// Word-by-word search over names, aliases, muscles, and equipment, so
+    /// "barbell press" and "shoulder flies" find what you meant.
     private var matches: [ExerciseDefinition] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return strengthExercises }
-        // Tolerate plurals: "squats" should also find "Squat".
-        let singular = trimmed.hasSuffix("s") && trimmed.count > 1 ? String(trimmed.dropLast()) : trimmed
-        return strengthExercises.filter { definition in
-            definition.name.localizedCaseInsensitiveContains(trimmed)
-                || definition.name.localizedCaseInsensitiveContains(singular)
-                // Searching a muscle ("chest", "quads") lists its exercises.
-                || definition.primary.contains { $0.displayName.localizedCaseInsensitiveContains(singular) }
-        }
+        ExerciseLibrary.search(query, in: strengthExercises)
     }
 
     var body: some View {
@@ -245,6 +238,7 @@ struct ExercisePickerList: View {
             parts.append("Also: " + definition.secondary.map(\.displayName).joined(separator: ", "))
         }
         if definition.usesBodyweight { parts.append("Bodyweight") }
+        if definition.usesBarbell { parts.append("Barbell") }
         return parts.joined(separator: " \u{00B7} ")
     }
 }
@@ -312,12 +306,14 @@ struct ActiveWorkoutView: View {
     var ownerID: UUID
     /// The lifter's current bodyweight, for one-tap fill on bodyweight moves.
     var bodyweightLbs: Double
-    var startTime: Date
     var onFinish: (WorkoutSession, [CardioEntry]) -> Void
     /// Discards the in-progress workout without saving.
     var onCancel: () -> Void
 
     @Environment(\.modelContext) private var context
+    /// The day this workout happened. Starts as now; change it to log a
+    /// workout you did on an earlier day.
+    @State private var workoutDate: Date
     @State private var exerciseDrafts: [ExerciseDraft]
     @State private var cardioDrafts: [CardioDraft]
     @State private var showAddSheet = false
@@ -339,15 +335,16 @@ struct ActiveWorkoutView: View {
     init(ownerID: UUID, bodyweightLbs: Double, startTime: Date, initialExercises: [ExerciseDefinition], restoredDraft: WorkoutDraftSnapshot? = nil, onFinish: @escaping (WorkoutSession, [CardioEntry]) -> Void, onCancel: @escaping () -> Void) {
         self.ownerID = ownerID
         self.bodyweightLbs = bodyweightLbs
-        self.startTime = startTime
         self.onFinish = onFinish
         self.onCancel = onCancel
         if let restoredDraft, restoredDraft.ownerID == ownerID {
+            _workoutDate = State(initialValue: restoredDraft.startTime)
             _exerciseDrafts = State(initialValue: restoredDraft.exerciseDrafts())
             _cardioDrafts = State(initialValue: restoredDraft.cardioDrafts())
         } else {
+            _workoutDate = State(initialValue: startTime)
             _exerciseDrafts = State(initialValue: initialExercises.map {
-                ExerciseDraft(definition: $0, sets: [SetDraft(weight: $0.usesBodyweight ? ForgeInput.display(bodyweightLbs) : "")])
+                ExerciseDraft(definition: $0, sets: [SetDraft(weight: TrainingMath.bodyweightFill(for: $0, bodyweightLbs: bodyweightLbs))])
             })
             _cardioDrafts = State(initialValue: [])
         }
@@ -357,7 +354,7 @@ struct ActiveWorkoutView: View {
 
     /// Everything on screen, in a form that can be written to disk.
     private var snapshot: WorkoutDraftSnapshot {
-        WorkoutDraftSnapshot(ownerID: ownerID, startTime: startTime, exerciseDrafts: exerciseDrafts, cardioDrafts: cardioDrafts)
+        WorkoutDraftSnapshot(ownerID: ownerID, startTime: workoutDate, exerciseDrafts: exerciseDrafts, cardioDrafts: cardioDrafts)
     }
 
     private var removalBinding: Binding<Bool> {
@@ -370,6 +367,17 @@ struct ActiveWorkoutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                // Which day this workout goes in History under. Defaults to
+                // today; pick an earlier day when logging after the fact.
+                DatePicker(
+                    "Workout date",
+                    selection: $workoutDate,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .font(.subheadline)
+                .padding(.horizontal)
+
                 if isEmptyWorkout {
                     VStack(spacing: 12) {
                         Image(systemName: "dumbbell.fill")
@@ -444,14 +452,8 @@ struct ActiveWorkoutView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text("Logging workout")
-                        .font(.headline)
-                    Text(startTime, style: .timer)
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
+                Text("Logging workout")
+                    .font(.headline)
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
@@ -562,7 +564,7 @@ struct ActiveWorkoutView: View {
         }
         exerciseDrafts.append(ExerciseDraft(
             definition: definition,
-            sets: [SetDraft(weight: definition.usesBodyweight ? ForgeInput.display(bodyweightLbs) : "")]
+            sets: [SetDraft(weight: TrainingMath.bodyweightFill(for: definition, bodyweightLbs: bodyweightLbs))]
         ))
     }
 
@@ -685,8 +687,12 @@ struct ActiveWorkoutView: View {
         isSaving = true
         defer { isSaving = false }
 
+        // Forge no longer times workouts, so endTime just marks when it was
+        // saved (or, for a past day, the same moment as the start).
+        let startTime = workoutDate
         let now = Date()
-        let session = WorkoutSession(ownerID: ownerID, date: startTime, startTime: startTime, endTime: now)
+        let endTime = Calendar.current.isDate(startTime, inSameDayAs: now) ? max(now, startTime) : startTime
+        let session = WorkoutSession(ownerID: ownerID, date: startTime, startTime: startTime, endTime: endTime)
         var counters: [String: Int] = [:]
         for entry in check.lifts {
             let number = (counters[entry.definition.id] ?? 0) + 1
@@ -789,7 +795,10 @@ struct ExerciseLoggingCard: View {
 
     @State private var showInstructions = false
 
-    private var stats: (volume: Double, best1RM: Double?) {
+    /// Live numbers for this exercise, computed exactly the way saving does.
+    private var stats: (sets: Int, reps: Int, volume: Double, best1RM: Double?) {
+        var setCount = 0
+        var totalReps = 0
         var volume = 0.0
         var best: Double?
         for set in draft.sets {
@@ -797,20 +806,46 @@ struct ExerciseLoggingCard: View {
             // Blank weight = bodyweight-only (0 added lb), same as saving.
             let weight = ForgeInput.isBlank(set.weight) ? 0 : (ForgeInput.decimal(set.weight) ?? -1)
             guard weight >= 0 else { continue }
+            setCount += 1
+            totalReps += reps
             volume += Double(reps) * weight
-            if (1...12).contains(reps), weight > 0 {
-                let estimate = TrainingMath.epleyOneRepMax(weightLbs: weight, reps: reps)
+            if let estimate = TrainingMath.estimatedOneRepMax(weightLbs: weight, reps: reps) {
                 best = max(best ?? 0, estimate)
             }
         }
-        return (volume, best)
+        return (setCount, totalReps, volume, best)
     }
 
-    /// Weight to prefill on a new set: bodyweight for bodyweight moves,
-    /// otherwise whatever the previous set used (most lifters repeat it).
+    /// Effective bodyweight load for this move, as text ("" if not a bodyweight move).
+    private var bodyweightFill: String {
+        TrainingMath.bodyweightFill(for: draft.definition, bodyweightLbs: bodyweightLbs)
+    }
+
+    /// Weight to prefill on a new set: whatever the previous set used (most
+    /// lifters repeat it), or the bodyweight load on bodyweight moves.
     private var nextSetWeight: String {
-        if draft.definition.usesBodyweight { return ForgeInput.display(bodyweightLbs) }
-        return draft.sets.last?.weight ?? ""
+        let previous = draft.sets.last?.weight ?? ""
+        if ForgeInput.isBlank(previous) { return bodyweightFill }
+        return previous
+    }
+
+    private var bodyweightLabel: String {
+        let fraction = draft.definition.bodyweightFraction
+        if fraction < 1 {
+            return "Fill bodyweight load (\(bodyweightFill) lb \u{00B7} ~\(Int((fraction * 100).rounded()))% of you)"
+        }
+        return "Fill bodyweight (\(bodyweightFill) lb)"
+    }
+
+    private var statsLine: String {
+        let s = stats
+        guard s.sets > 0 else { return "Volume = weight \u{00D7} reps, added up across sets" }
+        let setWord = s.sets == 1 ? "set" : "sets"
+        var line = "\(s.sets) \(setWord) \u{00B7} \(s.reps) reps \u{00B7} \(Int(s.volume.rounded()).formatted()) lb volume"
+        if let best = s.best1RM {
+            line += " \u{00B7} est 1RM \(Int(best.rounded()).formatted()) lb"
+        }
+        return line
     }
 
     var body: some View {
@@ -841,13 +876,30 @@ struct ExerciseLoggingCard: View {
 
             if draft.definition.usesBodyweight {
                 Button {
-                    let bw = ForgeInput.display(bodyweightLbs)
                     for i in draft.sets.indices where ForgeInput.isBlank(draft.sets[i].weight) {
-                        draft.sets[i].weight = bw
+                        draft.sets[i].weight = bodyweightFill
                     }
                 } label: {
-                    Label("Fill bodyweight (\(ForgeInput.display(bodyweightLbs)) lb)", systemImage: "person.fill")
+                    Label(bodyweightLabel, systemImage: "person.fill")
                         .font(.subheadline)
+                }
+            }
+
+            if draft.definition.usesBarbell {
+                // The weight box is the TOTAL on the bar. Without this, some
+                // sets get logged as plates only and others with the bar.
+                HStack(spacing: 6) {
+                    Text("Barbell? Enter the total \u{2014} plates plus the bar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Button("Empty bar") {
+                        let bar = ForgeInput.display(ExerciseLibrary.standardBarLbs)
+                        for i in draft.sets.indices where ForgeInput.isBlank(draft.sets[i].weight) {
+                            draft.sets[i].weight = bar
+                        }
+                    }
+                    .font(.caption)
                 }
             }
 
@@ -870,15 +922,10 @@ struct ExerciseLoggingCard: View {
                     .font(.subheadline)
             }
 
-            HStack {
-                Text("Volume: \(Int(stats.volume)) lb")
-                if let best1RM = stats.best1RM {
-                    Text("\u{00B7} Est 1RM: \(Int(best1RM)) lb")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .contentTransition(.numericText())
+            Text(statsLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
         }
         .forgeCard()
     }

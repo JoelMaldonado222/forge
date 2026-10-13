@@ -1,10 +1,10 @@
 # Forge v7 — issues found and fixed
 
-Branch: `v7-polish` (based on v6, commit 79e0c85). 41 issues fixed across 13 files.
+Branch: `v7-polish` (based on v6, commit 79e0c85). 49 issues fixed in total: 41 from the code review, then 8 from Joel's gym-testing notes (at the end).
 
-**Schema:** one additive change only. `LoggedSet.exerciseOrder: Int?` (optional, so existing stores migrate with no data loss). Nothing renamed, nothing retyped.
+**Schema:** one additive change only. `LoggedSet.exerciseOrder: Int?` (optional, so existing stores migrate with no data loss). Nothing renamed, nothing retyped. The gym-notes round changed no SwiftData models (the new exercise fields live on `ExerciseDefinition`, a plain struct that is never saved).
 
-**Verification:** every Swift file was syntax-parsed after editing. It has NOT been compiled or type-checked yet — the first Xcode build on the Mac is the real check.
+**Verification:** every Swift file was syntax-parsed after editing. It has NOT been compiled or type-checked yet — the first Xcode build on the Mac is the real check. The new 3D figure was laid out in a three.js prototype and checked from the front, back, side, and three-quarter views before being ported to SceneKit.
 
 ## Workout logging — WorkoutFlowView.swift
 
@@ -84,6 +84,22 @@ Branch: `v7-polish` (based on v6, commit 79e0c85). 41 issues fixed across 13 fil
 - Today is highlighted on the week bars.
 - Recap text is selectable.
 
+## Round 2 — from Joel's gym testing
+
+42. **"Barbell press" found nothing.** Search only matched the whole typed phrase against the exercise name. Fix: word-by-word search over the name, aliases ("military press", "flat bench", "OHP", …), muscles, and equipment, in any order. "barbell press" now finds Bench Press and Overhead Press. (`ExerciseLibrary.search`)
+43. **"Shoulder flies" found nothing.** "flies" wasn't recognized as "fly", and there was no rear-delt fly at all. Fix: proper plural handling (flies → fly, presses → press), "shoulder fly" aliases on Lateral Raise, and a new **Rear Delt Fly** exercise (new ID `rear-delt-fly`; no existing IDs changed).
+44. **Workouts done on other days were logged as today.** Every workout was stamped with the moment you tapped New Workout. Fix: a **Workout date** picker at the top of the logging screen (defaults to today, can't pick the future). Already-saved workouts can be moved with **Change date** on their detail screen, which also moves their paired cardio.
+45. **Timing removed.** The live clock and the Duration tile were dropped. They were meaningless when logging after the fact. Calories no longer depend on duration either (see 48). `endTime` is still saved, since it's in the schema.
+46. **History looked untappable.** The only tappable rows (the workout list) sat below roughly 14 insight cards, so nothing on the first screen responded to touch. Fix: tap a day bar to list that day's workouts right under the bars; ‹ › arrows page back through past weeks; workouts are listed near the top; insights are cut to the top 3 with an "All insights" link. Rows now show exercise names. Day bars use borderless buttons so each day is its own tap target, and session rows use value-based navigation so detail screens are built only when opened.
+47. **The 3D figure looked like stacked boxes.** Fix: rebuilt as an athletic mannequin from smooth ellipsoids and capsules. The base body is continuous, with muscle overlays for pecs, traps, lats, upper back, six-pack plus obliques, delts, biceps, triceps, forearms, glutes, quads, hamstrings, and calves. It uses graphite materials, studio lighting (ambient, key, fill, rim) instead of SceneKit's default flat light, a contact shadow, and a camera framed on the body with orbit centered on the torso. Lightly worked muscles now show a clear dimmer volt instead of a muddy olive. All colors and lights live in ForgeTheme.
+48. **The math didn't explain itself, and calories ignored set count.**
+    - Volume is weight × reps summed over sets (5 × 15 × 45 = 3,375 lb). It's the standard volume-load / tonnage number, not force or physical work. That is now stated on the logging card, the summary, History, and a new **How Forge measures** screen with worked examples.
+    - Calories used a flat 4 minutes per exercise, so 1 set and 10 sets burned the same. They now assume about 2 minutes per set, rest included, through the MET formula.
+    - Bodyweight fill now uses the share of bodyweight actually moved: 100% for pull-ups and dips, about 64% for push-ups (Ebben et al. 2011), and about 32% for hanging leg raises (legs only, body-segment tables). Only the prefill changed; past sets are untouched.
+    - Barbell lifts show "enter the total, plates plus the bar" and an **Empty bar** (45 lb) button, so sets aren't logged as plates only.
+    - Est 1RM rules live in one place (`TrainingMath.estimatedOneRepMax`): 12 reps or fewer, with weight. A set of 15 deliberately shows no estimate.
+49. **Bodyweight sets showed "× 0 lb" or "(bodyweight)" inconsistently.** Fix: shown as "no added weight", with volume only counted when a weight was logged.
+
 ## Rules for the next person editing Forge
 
 1. Every model has `ownerID`, and every query filters by the active profile.
@@ -94,3 +110,5 @@ Branch: `v7-polish` (based on v6, commit 79e0c85). 41 issues fixed across 13 fil
 6. Parse typed numbers with `ForgeInput`, never `Double(text)` directly.
 7. A screen pushed onto an existing NavigationStack must not wrap itself in another NavigationStack.
 8. On any failed `context.save()`, call `context.rollback()` and tell the user.
+9. Exercise IDs in ExerciseLibrary are stored on every saved set. Never rename or delete one; add new exercises with new IDs. Names and aliases can change freely.
+10. The 3D figure's shapes are tuned as a set (base body plus muscle overlays). Change one proportion at a time and check it from front, back, and side.

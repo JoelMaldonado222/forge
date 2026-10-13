@@ -32,16 +32,15 @@ enum SummaryGenerator {
             var line = "You did \(count) \(setWord) of \(displayName) for \(totalReps) total reps"
             if topWeight > 0 {
                 line += " at up to \(fmt(topWeight)) lb"
+                line += " \u{2014} \(fmt(volume)) lb of volume (weight \u{00D7} reps, all sets)."
             } else {
-                line += " (bodyweight)"
+                line += " with no added weight logged."
             }
-            line += " \u{2014} that's about \(fmt(volume)) lb of volume."
 
             let best1RM = exerciseSets
-                .filter { (1...12).contains($0.reps) }
-                .map { TrainingMath.epleyOneRepMax(weightLbs: $0.weightLbs, reps: $0.reps) }
+                .compactMap { TrainingMath.estimatedOneRepMax(weightLbs: $0.weightLbs, reps: $0.reps) }
                 .max()
-            if let best1RM, best1RM > 0 {
+            if let best1RM {
                 line += " Your best set estimates a \(fmt(best1RM)) lb one-rep max."
             }
             lines.append(line)
@@ -66,16 +65,12 @@ enum SummaryGenerator {
 
         var total = ""
         if !sets.isEmpty {
-            total += "All in, you moved about \(fmt(totalVolume)) lb across \(exerciseCount) \(exerciseWord)"
-            if let end = session.endTime {
-                let minutes = max(1, Int(end.timeIntervalSince(session.startTime) / 60))
-                total += " in about \(minutes) minutes"
-            }
-            total += " and "
+            let setCount = sets.count
+            total += "All in: \(setCount) \(setCount == 1 ? "set" : "sets") across \(exerciseCount) \(exerciseWord), \(fmt(totalVolume)) lb of total volume, and you "
         } else {
             total += "In total you "
         }
-        total += "burned roughly \(fmt(calories)) calories."
+        total += "burned roughly \(fmt(calories)) calories (estimated from sets and minutes, not measured)."
         lines.append(total)
         lines.append("")
 
